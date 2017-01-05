@@ -1,26 +1,60 @@
 library(mlr)
-library(randomForest)
-library(corrplot)
-library(e1071)
-#paid-"Current","Fully Paid","In Grace Period","Late (16-30 days)","Late (31-120 days)","Current" 
-#Non-Paid-"Charged Off","Default" 
-claim<-read.csv(file.choose(),header = TRUE,na.strings=c(" ","NA"))
+library(caret)
+library(dplyr)
+library(lubridate)
+library(DescTools)
+library(FSelector)
+library(ggplot2)
+
+claim<-read.csv(file.choose(),header = TRUE,na.strings=c(""," ","NA"))
 claim$bad_loans<-ifelse(claim$bad_loans==1,"yes","no")
 claim$bad_loans<-as.factor(claim$bad_loans)
 dim(claim) #466287*68
 loandata<-claim
-claim<-loandata
-dim(loandata)
+ ##Ploting data to understand behaviour
 
-dim(claim)
-ggplot(loandata, aes(loan_amnt, col = purpose)) + geom_histogram(bins = 50) + facet_grid(grade ~ .)
+##ggplot(data=loandata,aes(x = age, y=wage_per_hour))+geom_point(aes(colour=income_level))+scale_y_continuous("wage per hour", breaks = seq(0,10000,1000))
+
+predictorsvdbad_loan <- function(i){
+  ggplot(claim2,aes(x=i,fill=claim$bad_loans))+geom_bar(position = "dodge",  color="green")+scale_fill_brewer(palette = "Pastel1")+theme(axis.text.x =element_text(angle  = 60,hjust = 1,size=10))
+}
+predictorsvdbad_loan(claim2$grade)
+
+names(claim2)
+
+ggplot(data=claim, aes(addr_state, loan_amnt))+geom_bar(stat="identity", aes(fill=addr_state))+coord_flip()+xlab("")+ylab("loan amount")+ggtitle("location loan details")+xlab("location")
+ggplot(data=claim, aes(bad_loans, loan_amnt))+geom_bar(stat="identity", aes(fill=bad_loans))+coord_flip()+xlab("")+ylab("loan amount")+ggtitle("deliquency")+xlab("bad_loans")
+table(claim$addr_state,claim$bad_loans)
+Desc(claim$loan_amnt, main = "Loan amount distribution", plotit = TRUE)
+Desc(claim$int_rate, main = "Interest Rate Distribution", plotit = TRUE)
+Desc(claim$addr_state, main = "State wise loan  count", plotit = TRUE)
+Desc(claim$emp_title, plotit=T, main="loan_title")
+
+ggplot(data=claim, aes(purpose, loan_amnt))+geom_bar(stat="identity", aes(fill=purpose))+coord_flip()+xlab("")+ylab("loan amount")+ggtitle("Reasoning behind taking loan")+xlab("Purpose")
+
+ggplot(data=int1, aes(loan_status, loan_amnt))+geom_boxplot(aes(fill=loan_status))+
+  theme(axis.text.x = element_blank()) +
+  labs(list(title = "Loan amount by status",x = "Status",y = "Amount")) 
+Desc(claim$loan_status, plotit = T)
+ggplot(loandata, aes(annual_inc, col = bad_loans)) + geom_histogram(bins = 50) + facet_grid(bad_loans ~ .)
+
 table(claim$loan_status,claim$bad_loans)
 summarizeColumns(claim)
+
 #str(claim)
+## Removing the identifier variables
 claim<-claim[,-c(1,2,11,16,17,19,20,22,23,24,27,46,48,49,52,64)]
 summarizeColumns(claim)
 
-############### Removing missing values
+
+############### DATA CLEANING
+#Removing missing values
+## we see there are few missing columns annual income, delinq_2yrs and collections for last 12 months
+## so we impute continous variable(annual income) with mean while we remove the missing values from delin_2 yrs and
+## collection for last 12 months. mths_since_last_delinq integer,mths_since_last_record, mths_since_last_major_derog We find that
+# these variables have >50% missing values. High proportion of missing value can be attributed to difficulty in data collection.
+#For now, we'll remove these category levels. 
+
 claim$annual_inc[is.na(claim$annual_inc)] <- mean(claim$annual_inc, na.rm = TRUE)
 claim<-subset(claim, !is.na(claim$delinq_2yrs))
 claim<-subset(claim, !is.na(claim$collections_12_mths_zero))
@@ -29,77 +63,81 @@ claim<-claim[,-c(18,19,37)]
 str(claim)
 summarizeColumns(claim)
 prop.table(table(claim$bad_loans))
-summarizeColumns(claim)
+##Now we have removed the missing data, we check for the multicollinearity between numerical data and remove all correlated data with threshol over 0.7
+## We use caret package for removing correlated data. we saw that 12 variables were correlated, we should remove those columns to get proper output
 library(caret)
 corplt <-findCorrelation(x = cor(claim[,c(1:3,5,6,11,15:22,24:35,37:48)]),cutoff = 0.7)
-corplt
 claim<-claim[,-corplt]
+#######################################  Feature Engineering and DATA Manipulation
+## Since corelated data has been removed we check for factor variables. we see that mans factors has many levels but with very low frequency
+## we will group low frequency data and call it some name to see better output. we can see status of loan can be clubbed for better output
+## we choose a thershold of 5%
+
 summarizeColumns(claim)
+prop.table(table(claim$status,claim$bad_loans))*100
+prop.table(table(claim$emp_length,claim$bad_loans))*100
+prop.table(table(claim$purpose,claim$bad_loans))*100
+
+## after chacking its behavious with response we see that we could combine the columns and call them as paid and not paid.
+
 claim$status<-as.character(claim$status)
 claim$status[claim$status %in% c("Current","Fully Paid", "In Grace Period","Late (16-30 days)","Late (31-120 days)" )]<-"Paid"
 claim$status[claim$status %in% c("Charged Off", "Default")]<-"Not Paid"
-head(claim$status,10)
 claim$status<-as.factor(claim$status)
 
-
-dim(claim)
+## After combinig features for status we will combine levles with less than 5%. since it is imbalanced data we remove status and target variable
+## and run a fuction for same.
 claim1<-claim[,-c(25,37)]
-dim(claim)
-names(claim)
-#train<-new.claim[1:326000,]
-#test<-new.claim[326001:466142,]
-summarizeColumns(claim)[,"nlevs"]
-#sum(train$bad_loans=="yes")
-##Building Model
-#sum(claim$bad_loans=="yes")
-table()
-for(i in names(claim1)){
-  p <- 5/100
-  ld <- names(which(prop.table(table(claim1[[i]])) < p))
-  levels(claim1[[i]])[levels(claim1[[i]]) %in% ld] <- "Other"
-}
-dim(claim)
-dim(claim1)
 
+summarizeColumns(claim)
+
+for(i in names(claim1)){
+  p <- 5/100
+  ld <- names(which(prop.table(table(claim1[[i]])) < p))
+  levels(claim1[[i]])[levels(claim1[[i]]) %in% ld] <- "Other"
+}
+
+## Now we compbine the status and bad loan with new data frame having less levels in factors
 status<-claim$status
 bad_loans<-claim$bad_loans
-head(claim2)
 claim2<-cbind(claim1,status,bad_loans)
-str(claim2)
-train.claim2<-claim2[1:326000,]
-library(dplyr)
+
+###############  Applying Machine learning
+## we use MLR package for machne learning which has end to end to support for logrithims
+## we do feature engineering using mlr package too. but initially we remove the features which explain almost total response of taget variable.
+## we also remove the faeture which has constant variance.
+## we divide the data in test and train in 70-30 ratioand collect a sample of 50000 for test to run over algorithims smoothly
 set.seed(121)
-claim3<-sample_n(train.claim2, 200000)
+claim2<-claim2[,-c(36,21,15)]
+library(dplyr)
+train.claim2<-claim2[1:326000,]
+claim3<-sample_n(train.claim2, 50000)
 
 test.claim2<-claim2[326001:466142,]
-dim(claim3)
-train.task <- makeClassifTask(data = claim3,target = "bad_loans")
-test.task<-makeClassifTask(data = test.claim2,target = "bad_loans")
-test.task
+claim4<-sample_n(train.claim2, 15000)
 library(mlr)
-library(FSelector)
-#train.task<-removeConstantFeatures(train.task)
-#test.task<-removeConstantFeatures(test.task)
+train.task <- makeClassifTask(data = claim3,target = "bad_loans")
+test.task<-makeClassifTask(data = claim4,target = "bad_loans")
 train.task
 test.task
+
+
+train.task<-removeConstantFeatures(train.task)
+test.task<-removeConstantFeatures(test.task)
+
 var_imp <- generateFilterValuesData(train.task, method = c("information.gain"))
 plotFilterValues(var_imp,feat.type.cols = TRUE)
-xtrain.task
-dim(claim)
-names(claim)
-summarizeColumns(claim)
-summarizeColumns(claim2)[,"nlevs"]
-rm(claim,claim1)
-?smote
-dim(claim2)
- 
+summarizeColumns(claim2)
+
 system.time(
-  train.smote <- smote(train.task,rate = 10,nn = 5)
+  train.smote <- smote(train.task,rate = 14,nn = 9)
 )
 
 table(getTaskTargets(train.smote))
 prop.table(table(getTaskTargets(train.smote)))
 listLearners("classif","twoclass")[c("class","package")]
+
+
 ###Logistics Regression
 lrn <- makeLearner('classif.logreg', predict.type = 'prob')
 lrn$par.vals<- list(laplace = 1)
@@ -107,51 +145,119 @@ lrn$par.vals<- list(laplace = 1)
 folds <- makeResampleDesc("CV",iters=10,stratify = TRUE)
 #cross validation function
 fun_cv <- function(a){
-  crv_val <- resample(lrn,a,folds,measures = list(acc,tpr,tnr,fpr,fp,fn))
-  crv_val$aggr
+  crv_val <- resample(lrn,a,folds,measures = list(acc,tpr,tnr,fpr,fp,fn))
+  crv_val$aggr
 }
 fun_cv(train.smote)
-##########################Naive bayes
-naive_learner <- makeLearner("classif.naiveBayes",predict.type = "response")
-naive_learner$par.vals <- list(laplace = 1)
-#10fold CV - stratified
-folds <- makeResampleDesc("CV",iters=10,stratify = TRUE)
-#cross validation function
-fun_cv <- function(a){
-  crv_val <- resample(naive_learner,a,folds,measures = list(acc,tpr,tnr,fpr,fp,fn))
-  crv_val$aggr
-}
-fun_cv(train.task)
-#acc.test.mean tpr.test.mean tnr.test.mean fpr.test.mean  fp.test.mean  fn.test.mean 
-#0.98785000    0.99230190    0.92349943    0.07650057   99.00000000  144.00000000 
-fun_cv(train.smote)
-#acc.test.mean tpr.test.mean tnr.test.mean fpr.test.mean  fp.test.mean  fn.test.mean 
-#0.98569844    0.99340850    0.97455374    0.02544626  329.30000000  123.30000000 
-prop.table(table(getTaskTargets(train.smote)))
-library(randomForest)
 #train and predict
-nB_model <- train(naive_learner, train.smote)
-nB_predict <- predict(nB_model,test.task) 
+lg_model <- train(lrn, train.smote)
+lg_predict <- predict(lg_model,test.task) 
+##evaluation
 
-#xgboost
-set.seed(2002)
-xgb_learner <- makeLearner("classif.xgboost",predict.type = "response")
-xgb_learner$par.vals <- list(objective = "binary:logistic",eval_metric = "error",nrounds = 150,print.every.n = 50)
-#define hyperparameters for tuning
-xg_ps <- makeParamSet( 
-  makeIntegerParam("max_depth",lower=3,upper=10),
-  makeNumericParam("lambda",lower=0.05,upper=0.5),
-  makeNumericParam("eta", lower = 0.01, upper = 0.5),
-  makeNumericParam("subsample", lower = 0.50, upper = 1),
-  makeNumericParam("min_child_weight",lower=2,upper=10),
-  makeNumericParam("colsample_bytree",lower = 0.50,upper = 0.80)
+lg_prediction <- lg_predict$data$response
+dCM <- confusionMatrix(claim4$bad_loans,lg_prediction)
+dCM
+##        Reference
+##Prediction     no    yes
+##        no  133655   4350
+##        yes 1506    631
+
+##calculate F measure
+
+precision <- dCM$byClass['Pos Pred Value']
+recall <- dCM$byClass['Sensitivity']
+f_measure <- 2*((precision*recall)/(precision+recall))
+f_measure 
+
+##
+roc_lr = generateThreshVsPerfData(lg_predict, measures = list(fpr, tpr, mmce))
+plotROCCurves(roc_lr)  
+performance(lg_predict, auc)
+
+
+#################### 
+getParamSet("classif.randomForest")
+rf <- makeLearner("classif.randomForest", predict.type = "prob", par.vals = list(ntree = 80, mtry = 3))
+rf$par.vals <- list(importance = TRUE)
+
+#set tunable parameters
+#grid search to find hyperparameters
+rf_param <- makeParamSet(makeIntegerParam("ntree",lower = 10, upper = 200),makeIntegerParam("mtry", lower = 3, upper = 10),makeIntegerParam("nodesize", lower = 10, upper = 50))
+rancontrol <- makeTuneControlRandom(maxit = 5L)
+set_cv <- makeResampleDesc("CV",iters = 3L)
+rf_tune <- tuneParams(learner = rf, resampling = set_cv, task = train.task, par.set = rf_param, control = rancontrol, measures = acc)
+
+#using hyperparameters for modeling
+rf.tree <- setHyperPars(rf, par.vals = rf_tune$x)
+
+rforest <- train(rf.tree, train.smote)
+getLearnerModel(t.rpart)
+rf_predict <- predict(rforest,test.task,type='prob') 
+##evaluation
+
+rf_prediction <- rf_predict$data$response
+dCM_rf <- confusionMatrix(claim4$bad_loans,rf_predict$data$response)
+
+dCM_rf
+precision <- dCM_rf$byClass['Pos Pred Value']
+recall <- dCM_rf$byClass['Sensitivity']
+f_measure <- 2*((precision*recall)/(precision+recall))
+f_measure 
+
+##
+roc_rf = generateThreshVsPerfData(rf_predict, measures = list(fpr, tpr, mmce))
+plotROCCurves(roc_rf)  
+performance(rf_predict, auc)
+
+
+
+##########################################
+
+
+
+# XGBOOST
+set.seed(410)
+xgb_learner <- makeLearner("classif.xgboost", predict.type = "prob")
+xgb_learner$par.vals <- list(
+  objective = "binary:logistic",
+  eval_metric = "error",
+  nrounds = 150,
+  print.every.n = 50
 )
-#define search function
-rancontrol <- makeTuneControlRandom(maxit = 5L) #do 5 iterations
-#5 fold cross validation
-set_cv <- makeResampleDesc("CV",iters = 5L,stratify = TRUE)
-#tune parameters
-xgb_tune <- tuneParams(learner = xgb_learner, task = train.task, resampling = set_cv, measures = list(acc,tpr,tnr,fpr,fp,fn), par.set = xg_ps, control = rancontrol)
-#set optimal parameters
-xgb_new <- setHyperPars(learner = xgb_learner, par.vals = xgb_tune$x)
-xgmodel <- train(xgb_new, train.task)
+
+xgb_params <- makeParamSet(
+  makeIntegerParam("max_depth",lower=3,upper=10),
+  makeNumericParam("lambda",lower=0.05,upper=0.5),
+  makeNumericParam("eta", lower = 0.01, upper = 0.5),
+  makeNumericParam("subsample", lower = 0.50, upper = 1),
+  makeNumericParam("min_child_weight",lower=2,upper=10),
+  makeNumericParam("colsample_bytree",lower = 0.50,upper = 0.80)
+)
+
+## random search function to choose params
+rancontrol <- makeTuneControlRandom(maxit = 5L)  # 5 iterations
+set_cv <- makeResampleDesc("CV", iters = 5L, stratify = T)  # 5 folds cross validation
+
+## tune params
+xgb_tune <- tuneParams(learner = xgb_learner, task = train.task, resampling = set_cv, measures = list(acc, tpr, tnr, fpr, fp, fn), par.set = xgb_params, control = rancontrol)
+xgb_tune$x
+## train the model and make predictions with optimal params
+xgb_optimal <- setHyperPars(learner = xgb_learner, par.vals = xgb_tune$x)
+xgb_model <- train(xgb_optimal, train.task)
+xgb_predict <- predict(xgb_model, test.task)
+xgb_prediction <- xgb_predict$data$response
+
+## evaluate the prediction results
+xgb_confusionmatrix <- confusionMatrix(claim4$bad_loans, xgb_prediction)
+xgb_confusionmatrix   
+precision <- xgb_confusionmatrix$byClass["Pos Pred Value"]
+precision
+recall <- xgb_confusionmatrix$byClass["Sensitivity"]
+recall
+f_measure <- 2*((precision*recall)/(precision+recall))
+f_measure   
+
+df_xgb = generateThreshVsPerfData(xgb_predict, measures = list(fpr, tpr, mmce))
+plotROCCurves(df_xgb)  
+performance(xgb_predict, auc)
+
